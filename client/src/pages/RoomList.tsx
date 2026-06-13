@@ -21,6 +21,8 @@ export default function RoomList() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [affectedBookings, setAffectedBookings] = useState<Booking[]>([]);
   const [loadingAffected, setLoadingAffected] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [conflictWarning, setConflictWarning] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const loadRooms = async () => {
@@ -47,21 +49,42 @@ export default function RoomList() {
   };
 
   const doSave = async () => {
+    setSaving(true);
+    setConflictWarning(null);
     try {
       if (editRoom) {
-        const result = await api.updateRoom(editRoom.id, form);
+        const cancelBookingIds = form.status === 'maintenance' && editRoom.status !== 'maintenance'
+          ? affectedBookings.map(b => b.id)
+          : undefined;
+
+        const result = await api.updateRoom(editRoom.id, { ...form, cancel_booking_ids: cancelBookingIds });
         if (result.cancelled_count && result.cancelled_count > 0) {
           setSuccessMessage(`已将房间设为维护，并自动取消 ${result.cancelled_count} 条关联预约`);
           setTimeout(() => setSuccessMessage(null), 3000);
         }
+        setShowForm(false);
+        setShowConfirm(false);
+        setAffectedBookings([]);
+        loadRooms();
       } else {
         await api.createRoom(form);
+        setShowForm(false);
+        loadRooms();
       }
-      setShowForm(false);
-      setShowConfirm(false);
-      setAffectedBookings([]);
-      loadRooms();
-    } catch {}
+    } catch (err: any) {
+      if (err.status === 409 && err.data && showConfirm && editRoom) {
+        const latest: Booking[] = err.data.current_bookings || [];
+        setAffectedBookings(latest);
+        if (latest.length === 0) {
+          setShowConfirm(false);
+          setConflictWarning('已无需要取消的预约，可直接保存');
+        } else {
+          setConflictWarning('预约信息已发生变化，已为您刷新，请重新核对');
+        }
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSave = async () => {
@@ -132,9 +155,22 @@ export default function RoomList() {
       )}
 
       {showForm && (
-        <div className="modal-overlay" onClick={() => setShowForm(false)}>
+        <div className="modal-overlay" onClick={() => { setShowForm(false); setConflictWarning(null); }}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h3 className="modal-title">{editRoom ? '编辑房间' : '新建房间'}</h3>
+            {conflictWarning && !showConfirm && (
+              <div style={{
+                padding: '0.6rem 0.8rem',
+                backgroundColor: '#fff3cd',
+                color: '#856404',
+                borderRadius: '4px',
+                marginBottom: '1rem',
+                border: '1px solid #ffeeba',
+                fontSize: '0.9rem',
+              }}>
+                ⚠️ {conflictWarning}
+              </div>
+            )}
             <div className="form-group">
               <label className="form-label">房间名称</label>
               <input className="form-input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="例：古堡密室" />
@@ -156,7 +192,10 @@ export default function RoomList() {
               </div>
               <div className="form-group">
                 <label className="form-label">状态</label>
-                <select className="form-select" value={form.status} onChange={e => setForm({ ...form, status: e.target.value as Room['status'] })}>
+                <select className="form-select" value={form.status} onChange={e => {
+                  setForm({ ...form, status: e.target.value as Room['status'] });
+                  setConflictWarning(null);
+                }}>
                   <option value="available">可用</option>
                   <option value="maintenance">维护中</option>
                 </select>
@@ -177,11 +216,24 @@ export default function RoomList() {
       )}
 
       {showConfirm && (
-        <div className="modal-overlay" onClick={() => { setShowConfirm(false); setAffectedBookings([]); }}>
+        <div className="modal-overlay" onClick={() => { setShowConfirm(false); setAffectedBookings([]); setConflictWarning(null); }}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }}>
             <h3 className="modal-title">确认设为维护状态</h3>
+            {conflictWarning && (
+              <div style={{
+                padding: '0.6rem 0.8rem',
+                backgroundColor: '#fff3cd',
+                color: '#856404',
+                borderRadius: '4px',
+                marginBottom: '1rem',
+                border: '1px solid #ffeeba',
+                fontSize: '0.9rem',
+              }}>
+                ⚠️ {conflictWarning}
+              </div>
+            )}
             <p style={{ color: '#e94560', marginBottom: '1rem' }}>
-              该房间当前有 <strong>{affectedBookings.length}</strong> 条已确认的预约，设为维护后将自动取消这些预约：
+              该房间当前有 <strong>{affectedBookings.length}</strong> 条已确认的预约，设为维护后将取消这些预约：
             </p>
             <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '1rem' }}>
               <table className="data-table">
@@ -206,12 +258,12 @@ export default function RoomList() {
               </table>
             </div>
             <p style={{ color: '#808098', fontSize: '0.85rem', marginBottom: '1rem' }}>
-              请确认以上信息无误，操作后关联预约将被取消。
+              请确认以上信息无误，操作后仅取消列表中显示的预约。
             </p>
             <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => { setShowConfirm(false); setAffectedBookings([]); }}>返回修改</button>
-              <button className="btn btn-primary" onClick={doSave} style={{ backgroundColor: '#e94560', borderColor: '#e94560' }}>
-                确认设为维护并取消预约
+              <button className="btn btn-secondary" onClick={() => { setShowConfirm(false); setAffectedBookings([]); setConflictWarning(null); }} disabled={saving}>返回修改</button>
+              <button className="btn btn-primary" onClick={doSave} style={{ backgroundColor: '#e94560', borderColor: '#e94560' }} disabled={saving || affectedBookings.length === 0}>
+                {saving ? '提交中...' : '确认设为维护并取消预约'}
               </button>
             </div>
           </div>

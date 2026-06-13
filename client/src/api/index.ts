@@ -18,7 +18,10 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const data = await res.json();
 
   if (!res.ok) {
-    throw new Error(data.error || '请求失败');
+    const err: any = new Error(data.error || '请求失败');
+    err.data = data;
+    err.status = res.status;
+    throw err;
   }
 
   return data as T;
@@ -120,7 +123,7 @@ export const api = {
     request<{ bookings: Booking[] }>(`/rooms/${id}/bookings`),
   createRoom: (data: Partial<Room>) =>
     request<{ room: Room }>('/rooms', { method: 'POST', body: JSON.stringify(data) }),
-  updateRoom: (id: number, data: Partial<Room>) =>
+  updateRoom: (id: number, data: Partial<Room> & { cancel_booking_ids?: number[] }) =>
     request<{ room: Room; cancelled_count: number; cancelled_bookings: Booking[] }>(`/rooms/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 
   getScripts: () => request<{ scripts: Script[] }>('/scripts'),

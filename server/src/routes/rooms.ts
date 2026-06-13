@@ -55,7 +55,7 @@ router.post('/', authMiddleware, adminMiddleware, (req: AuthRequest, res: Respon
 });
 
 router.put('/:id', authMiddleware, adminMiddleware, (req: AuthRequest, res: Response): void => {
-  const { name, capacity, duration, price, status, description } = req.body;
+  const { name, capacity, duration, price, status, description, cancel_booking_ids } = req.body;
 
   const existing = db.prepare('SELECT * FROM rooms WHERE id = ?').get(req.params.id) as any;
   if (!existing) {
@@ -68,19 +68,39 @@ router.put('/:id', authMiddleware, adminMiddleware, (req: AuthRequest, res: Resp
   let cancelledBookings: any[] = [];
 
   if (newStatus === 'maintenance' && existing.status !== 'maintenance') {
-    const stmt = db.prepare(`
+    const currentBookings = db.prepare(`
       SELECT b.*, r.name as room_name, s.title as script_title, u.nickname as user_nickname
       FROM bookings b
       LEFT JOIN rooms r ON b.room_id = r.id
       LEFT JOIN scripts s ON b.script_id = s.id
       LEFT JOIN users u ON b.user_id = u.id
       WHERE b.room_id = ? AND b.status = 'confirmed'
-    `);
-    cancelledBookings = stmt.all(req.params.id);
-    cancelledCount = cancelledBookings.length;
+      ORDER BY b.date ASC, b.time_slot ASC
+    `).all(req.params.id) as any[];
 
-    if (cancelledCount > 0) {
-      db.prepare("UPDATE bookings SET status = 'cancelled' WHERE room_id = ? AND status = 'confirmed'").run(req.params.id);
+    if (cancel_booking_ids && Array.isArray(cancel_booking_ids) && cancel_booking_ids.length > 0) {
+      const currentIds = new Set(currentBookings.map(b => b.id));
+      const requestedIds = cancel_booking_ids.map(Number).filter(id => currentIds.has(id));
+
+      if (requestedIds.length !== cancel_booking_ids.length) {
+        res.status(409).json({
+          error: '预约信息已发生变化，请重新核对',
+          current_bookings: currentBookings,
+        });
+        return;
+      }
+
+      if (requestedIds.length > 0) {
+        const placeholders = requestedIds.map(() => '?').join(',');
+        const updateStmt = db.prepare(`UPDATE bookings SET status = 'cancelled' WHERE id IN (${placeholders})`);
+        const info = updateStmt.run(...requestedIds);
+        cancelledCount = info.changes;
+
+        cancelledBookings = currentBookings.filter(b => requestedIds.includes(b.id));
+      }
+    } else if (currentBookings.length > 0) {
+      res.status(400).json({ error: '请提供要取消的预约 ID 列表' });
+      return;
     }
   }
 
