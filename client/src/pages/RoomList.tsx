@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type Room } from '../api';
+import { api, type Room, type Booking } from '../api';
 import { StatusTag } from '../components/Shared';
 import { useAuth } from '../components/AuthProvider';
 
@@ -18,6 +18,10 @@ export default function RoomList() {
     description: '',
   });
   const [loading, setLoading] = useState(true);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [affectedBookings, setAffectedBookings] = useState<Booking[]>([]);
+  const [loadingAffected, setLoadingAffected] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const loadRooms = async () => {
     try {
@@ -42,22 +46,57 @@ export default function RoomList() {
     setShowForm(true);
   };
 
-  const handleSave = async () => {
+  const doSave = async () => {
     try {
       if (editRoom) {
-        await api.updateRoom(editRoom.id, form);
+        const result = await api.updateRoom(editRoom.id, form);
+        if (result.cancelled_count && result.cancelled_count > 0) {
+          setSuccessMessage(`已将房间设为维护，并自动取消 ${result.cancelled_count} 条关联预约`);
+          setTimeout(() => setSuccessMessage(null), 3000);
+        }
       } else {
         await api.createRoom(form);
       }
       setShowForm(false);
+      setShowConfirm(false);
+      setAffectedBookings([]);
       loadRooms();
     } catch {}
+  };
+
+  const handleSave = async () => {
+    if (editRoom && form.status === 'maintenance' && editRoom.status !== 'maintenance') {
+      setLoadingAffected(true);
+      try {
+        const { bookings } = await api.getRoomBookings(editRoom.id);
+        if (bookings.length > 0) {
+          setAffectedBookings(bookings);
+          setShowConfirm(true);
+        } else {
+          doSave();
+        }
+      } catch {} finally { setLoadingAffected(false); }
+    } else {
+      doSave();
+    }
   };
 
   if (loading) return <div style={{ textAlign: 'center', padding: '4rem', color: '#808098' }}>加载中...</div>;
 
   return (
     <div>
+      {successMessage && (
+        <div style={{
+          padding: '0.8rem 1rem',
+          backgroundColor: '#155724',
+          color: '#d4edda',
+          borderRadius: '4px',
+          marginBottom: '1rem',
+          border: '1px solid #1e7e34',
+        }}>
+          {successMessage}
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
         <h1 className="page-title">房间列表</h1>
         {user?.role === 'admin' && (
@@ -128,8 +167,52 @@ export default function RoomList() {
               <textarea className="form-textarea" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="房间描述..." />
             </div>
             <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => setShowForm(false)}>取消</button>
-              <button className="btn btn-primary" onClick={handleSave}>保存</button>
+              <button className="btn btn-secondary" onClick={() => setShowForm(false)} disabled={loadingAffected}>取消</button>
+              <button className="btn btn-primary" onClick={handleSave} disabled={loadingAffected}>
+                {loadingAffected ? '检查中...' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showConfirm && (
+        <div className="modal-overlay" onClick={() => { setShowConfirm(false); setAffectedBookings([]); }}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+            <h3 className="modal-title">确认设为维护状态</h3>
+            <p style={{ color: '#e94560', marginBottom: '1rem' }}>
+              该房间当前有 <strong>{affectedBookings.length}</strong> 条已确认的预约，设为维护后将自动取消这些预约：
+            </p>
+            <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '1rem' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>玩家</th>
+                    <th>剧本</th>
+                    <th>日期</th>
+                    <th>时段</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {affectedBookings.map(b => (
+                    <tr key={b.id}>
+                      <td style={{ color: '#fff' }}>{b.user_nickname || '-'}</td>
+                      <td>{b.script_title || '未指定'}</td>
+                      <td>{b.date}</td>
+                      <td>{b.time_slot}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p style={{ color: '#808098', fontSize: '0.85rem', marginBottom: '1rem' }}>
+              请确认以上信息无误，操作后关联预约将被取消。
+            </p>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => { setShowConfirm(false); setAffectedBookings([]); }}>返回修改</button>
+              <button className="btn btn-primary" onClick={doSave} style={{ backgroundColor: '#e94560', borderColor: '#e94560' }}>
+                确认设为维护并取消预约
+              </button>
             </div>
           </div>
         </div>

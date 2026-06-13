@@ -116,10 +116,12 @@ export const api = {
   getMe: () => request<{ user: User }>('/auth/me'),
 
   getRooms: () => request<{ rooms: Room[] }>('/rooms'),
+  getRoomBookings: (id: number) =>
+    request<{ bookings: Booking[] }>(`/rooms/${id}/bookings`),
   createRoom: (data: Partial<Room>) =>
     request<{ room: Room }>('/rooms', { method: 'POST', body: JSON.stringify(data) }),
   updateRoom: (id: number, data: Partial<Room>) =>
-    request<{ room: Room }>(`/rooms/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    request<{ room: Room; cancelled_count: number; cancelled_bookings: Booking[] }>(`/rooms/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 
   getScripts: () => request<{ scripts: Script[] }>('/scripts'),
   getScript: (id: number) =>
